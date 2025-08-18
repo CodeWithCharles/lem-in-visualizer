@@ -62,7 +62,7 @@ onMounted(() => {
 		.enableNodeDrag(false)
 		.enableNavigationControls(true);
 
-	// --- Node rendering with ants ---
+	// --- Node rendering with ants (removed problematic labels) ---
 	Graph.nodeThreeObject(node => {
 		const group = new THREE.Group();
 
@@ -72,25 +72,6 @@ onMounted(() => {
 			new THREE.MeshStandardMaterial({ color: node.color })
 		);
 		group.add(sphere);
-
-		// Add node label
-		const canvas = document.createElement('canvas');
-		const context = canvas.getContext('2d');
-		if (context) {
-			canvas.width = 64;
-			canvas.height = 64;
-			context.fillStyle = 'white';
-			context.font = '12px Arial';
-			context.textAlign = 'center';
-			context.fillText(String(node.id), 32, 32);
-		}
-
-		const texture = new THREE.CanvasTexture(canvas);
-		const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
-		const sprite = new THREE.Sprite(spriteMaterial);
-		sprite.position.set(0, 3, 0);
-		sprite.scale.set(4, 4, 1);
-		group.add(sprite);
 
 		// Render ants above node in a circle
 		if (node.ants && node.ants.length > 0) {
@@ -110,8 +91,8 @@ onMounted(() => {
 		return group;
 	});
 
-	// --- Create tube-like links ---
-	const tubeObjects = new Map<string, THREE.Mesh>();
+	// --- Create tube-like links with proper bidirectional handling ---
+	const tubeObjects = new Map<string, { tube: THREE.Mesh, curve: THREE.LineCurve3 }>();
 
 	Graph
 		.linkColor(() => 'transparent') // Hide default links
@@ -127,7 +108,6 @@ onMounted(() => {
 			// Create tube geometry
 			const start = new THREE.Vector3(sourceNode.x!, sourceNode.y!, sourceNode.z!);
 			const end = new THREE.Vector3(targetNode.x!, targetNode.y!, targetNode.z!);
-			const distance = start.distanceTo(end);
 
 			// Create a path for the tube
 			const curve = new THREE.LineCurve3(start, end);
@@ -144,10 +124,12 @@ onMounted(() => {
 
 			const tube = new THREE.Mesh(tubeGeometry, tubeMaterial);
 
-			// Store tube for ant movement calculations
-			const linkKey = `${link.source}-${link.target}`;
-			tubeObjects.set(linkKey, tube);
-			tubeObjects.set(`${link.target}-${link.source}`, tube); // Both directions
+			// Store tube for ant movement calculations (both directions with same curve)
+			const linkKey1 = `${link.source}-${link.target}`;
+			const linkKey2 = `${link.target}-${link.source}`;
+
+			tubeObjects.set(linkKey1, { tube, curve });
+			tubeObjects.set(linkKey2, { tube, curve: new THREE.LineCurve3(end, start) }); // Reversed curve
 
 			return tube;
 		});
@@ -173,7 +155,7 @@ onMounted(() => {
 	directionalLight.position.set(1, 1, 1);
 	scene.add(directionalLight);
 
-	// --- Turn-based ant movement system ---
+	// --- Turn-based ant movement system with counters ---
 	let currentTurn = 0;
 	let isAnimating = false;
 	const turnNumbers = Array.from(turns.keys()).sort((a, b) => a - b);
@@ -183,6 +165,53 @@ onMounted(() => {
 	// Track ant positions and movements
 	const antObjects = new Map<number, THREE.Mesh>();
 	const antPositions = new Map<number, string>(); // antId -> roomId
+	const movingAnts = new Set<number>(); // Track which ants are currently moving
+
+	// Counter elements
+	const createCounterDisplay = () => {
+		const counterDiv = document.createElement('div');
+		counterDiv.id = 'ant-counters';
+		counterDiv.style.cssText = `
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 15px;
+      border-radius: 10px;
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      z-index: 1000;
+      border: 2px solid #00ffff;
+    `;
+		document.body.appendChild(counterDiv);
+		return counterDiv;
+	};
+
+	const counterDisplay = createCounterDisplay();
+
+	const updateCounters = () => {
+		const startRoomId = nodes.find(n => n.type === 'start')?.id;
+		const endRoomId = nodes.find(n => n.type === 'end')?.id;
+
+		let atStart = 0;
+		let traveling = movingAnts.size;
+		let atEnd = 0;
+
+		antPositions.forEach((roomId, antId) => {
+			if (!movingAnts.has(antId)) {
+				if (roomId === startRoomId) atStart++;
+				else if (roomId === endRoomId) atEnd++;
+			}
+		});
+
+		counterDisplay.innerHTML = `
+      <div style="margin-bottom: 8px; color: #00ff00;">🟢 At Start: ${atStart}</div>
+      <div style="margin-bottom: 8px; color: #ffff00;">🔄 Traveling: ${traveling}</div>
+      <div style="color: #ff0000;">🏁 At End: ${atEnd}</div>
+      <div style="margin-top: 10px; color: #00ffff;">Turn: ${turnNumbers[currentTurn] || 0}</div>
+    `;
+	};
 
 	// Initialize ants at start position (inside the room, not floating above)
 	const startRoom = nodes.find(n => n.type === 'start');
@@ -218,7 +247,7 @@ onMounted(() => {
 		return room ? { x: room.x!, y: room.y!, z: room.z! } : null;
 	};
 
-	// Function to animate ant movement inside tubes
+	// Function to animate ant movement inside tubes (fixed bidirectional)
 	const moveAnt = (antId: number, fromRoom: string, toRoom: string, duration: number) => {
 		const ant = antObjects.get(antId);
 		const fromPos = getRoomPosition(fromRoom);
@@ -228,10 +257,9 @@ onMounted(() => {
 
 		const startTime = Date.now();
 
-		// Check if there's a tube for this path
+		// Get the correct directional curve
 		const linkKey = `${fromRoom}-${toRoom}`;
-		const reverseLinkKey = `${toRoom}-${fromRoom}`;
-		const tube = tubeObjects.get(linkKey) || tubeObjects.get(reverseLinkKey);
+		const tubeData = tubeObjects.get(linkKey);
 
 		const animate = () => {
 			const elapsed = Date.now() - startTime;
@@ -240,18 +268,14 @@ onMounted(() => {
 			// Smooth easing function
 			const easeProgress = 1 - Math.pow(1 - progress, 3);
 
-			if (tube) {
-				// Move ant through the tube
-				const tubeGeometry = tube.geometry as THREE.TubeGeometry;
-				const tubeCurve = tubeGeometry.parameters.path as THREE.LineCurve3;
-
-				// Get position along the curve
-				const point = tubeCurve.getPoint(easeProgress);
+			if (tubeData) {
+				// Move ant through the tube using the correct directional curve
+				const point = tubeData.curve.getPoint(easeProgress);
 
 				// Add slight random offset within tube radius for variety
-				const tubeRadius = tubeGeometry.parameters.radius;
+				const tubeRadius = 1.2;
 				const randomAngle = (antId * 0.5) % (Math.PI * 2); // Consistent per ant
-				const offsetRadius = tubeRadius * 0.5;
+				const offsetRadius = tubeRadius * 0.3;
 
 				point.x += Math.cos(randomAngle + progress * Math.PI * 2) * offsetRadius;
 				point.z += Math.sin(randomAngle + progress * Math.PI * 2) * offsetRadius;
@@ -278,7 +302,7 @@ onMounted(() => {
 		animate();
 	};
 
-	// Function to execute a turn
+	// Function to execute a turn (updated with counter tracking)
 	const executeTurn = async (turnIndex: number) => {
 		if (isAnimating || turnIndex >= turnNumbers.length) return;
 
@@ -288,15 +312,26 @@ onMounted(() => {
 
 		console.log(`Turn ${turnNumber}:`, moves);
 
+		// Mark ants as moving and update counters
+		moves.forEach(move => movingAnts.add(move.ant));
+		updateCounters();
+
 		// Start all movements for this turn
 		const movePromises = moves.map(move => {
 			return new Promise<void>((resolve) => {
 				const currentPos = antPositions.get(move.ant);
 				if (currentPos) {
 					moveAnt(move.ant, currentPos, move.room, MOVE_DURATION);
-					antPositions.set(move.ant, move.room);
+
+					// Update position after movement completes
+					setTimeout(() => {
+						antPositions.set(move.ant, move.room);
+						movingAnts.delete(move.ant);
+						resolve();
+					}, MOVE_DURATION);
+				} else {
+					resolve();
 				}
-				setTimeout(resolve, MOVE_DURATION);
 			});
 		});
 
@@ -309,14 +344,17 @@ onMounted(() => {
 		});
 
 		antPositions.forEach((roomId, antId) => {
-			const node = nodes.find(n => n.id === roomId);
-			if (node) {
-				if (!node.ants) node.ants = [];
-				node.ants.push(antId);
+			if (!movingAnts.has(antId)) {
+				const node = nodes.find(n => n.id === roomId);
+				if (node) {
+					if (!node.ants) node.ants = [];
+					node.ants.push(antId);
+				}
 			}
 		});
 
 		Graph?.graphData({ nodes, links });
+		updateCounters();
 
 		isAnimating = false;
 	};
@@ -333,16 +371,18 @@ onMounted(() => {
 		if (currentTurn === 0) {
 			setTimeout(() => {
 				if (autoPlay) {
-					// Reset all ants to start position
+					// Reset all ants to start position and update counters
 					const startRoom = nodes.find(n => n.type === 'start');
 					if (startRoom) {
+						movingAnts.clear();
 						antPositions.forEach((_, antId) => {
 							antPositions.set(antId, startRoom.id as string);
 							const ant = antObjects.get(antId);
 							if (ant) {
-								ant.position.set(startRoom.x!, startRoom.y! + 3, startRoom.z!);
+								ant.position.set(startRoom.x!, startRoom.y! + 2, startRoom.z!);
 							}
 						});
+						updateCounters();
 					}
 					setTimeout(playNextTurn, 1000);
 				}
@@ -352,9 +392,12 @@ onMounted(() => {
 		}
 	};
 
-	// Start the animation
+	// Start the animation and initialize counters
 	if (turnNumbers.length > 0) {
+		updateCounters(); // Initial counter display
 		setTimeout(playNextTurn, 1000);
+	} else {
+		updateCounters(); // Show initial state even with no moves
 	}
 
 	// Add controls (optional - you can remove this if not needed)
@@ -371,5 +414,5 @@ onMounted(() => {
 </script>
 
 <template>
-	<div id="3d-graph" ref="graphContainer" style="width: 100vh; height: 100vh; background: #000;"></div>
+	<div id="3d-graph" ref="graphContainer" style="width: 100%; height: 100vh; background: #000;"></div>
 </template>
