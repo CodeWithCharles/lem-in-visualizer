@@ -34,7 +34,8 @@ const { nodes, links, turns } = parsedDataTo3DForceGraph(parsed);
 nodes.forEach(node => {
 	node.x = Number(node.x ?? 0) * SCALE;
 	node.y = Number(node.y ?? 0) * SCALE;
-	node.z = Number(node.z ?? 0) * SCALE;
+	node.z = (Number(node.z ?? 0) + Math.random() * 0.5 * nodes.length) * SCALE;
+	console.log(node);
 	node.type = node.type ?? "normal";
 	node.ants = [];
 	node.color = node.type === 'start' ? 'green' : node.type === 'end' ? 'red' : 'lightblue';
@@ -390,6 +391,11 @@ onMounted(() => {
 						startRoom.y! + 2,
 						startRoom.z! + Math.sin(angle) * radius
 					);
+					// ant.position.set(
+					// 	startRoom.x!,
+					// 	startRoom.y!,
+					// 	startRoom.z!
+					// )
 				}
 			});
 		}
@@ -478,17 +484,17 @@ onMounted(() => {
 				const antIndex = antsInRoom.findIndex(([aId]) => aId === antId);
 				const totalAntsInRoom = antsInRoom.length;
 
-				if (totalAntsInRoom > 1) {
-					const angle = (antIndex / totalAntsInRoom) * Math.PI * 2;
-					const radius = 1.5;
-					ant.position.set(
-						room.x + Math.cos(angle) * radius,
-						room.y + 2,
-						room.z + Math.sin(angle) * radius
-					);
-				} else {
-					ant.position.set(room.x, room.y + 2, room.z);
-				}
+				// if (totalAntsInRoom > 1) {
+				// 	const angle = (antIndex / totalAntsInRoom) * Math.PI * 2;
+				// 	const radius = 1.5;
+				// 	ant.position.set(
+				// 		room.x + Math.cos(angle) * radius,
+				// 		room.y + 2,
+				// 		room.z + Math.sin(angle) * radius
+				// 	);
+				// } else {
+				ant.position.set(room.x, room.y, room.z);
+				// }
 			}
 		});
 
