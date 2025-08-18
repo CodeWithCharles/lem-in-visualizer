@@ -8,6 +8,7 @@ import type { GraphNode } from '@/types';
 import { ParsedData } from './types/parsedData';
 
 const SCALE = 10; // Increased scale for better visibility
+let autoPlay = false;
 
 // --- Parse input ---
 const parsed: ParsedData = parseLemin(`2
@@ -137,12 +138,12 @@ onMounted(() => {
 	// --- Set initial graph data ---
 	Graph.graphData({ nodes, links });
 
-	// --- Position camera for better view ---
+	// --- Position camera for better view (rotated 180°) ---
 	setTimeout(() => {
 		if (Graph) {
 			Graph.cameraPosition(
-				{ x: 0, y: 0, z: 100 }, // Camera position
-				{ x: 0, y: 0, z: 0 },   // Look at center
+				{ x: 0, y: 0, z: -100 }, // Camera position (flipped z)
+				{ x: 0, y: 0, z: 0 },    // Look at center
 				1000 // Animation duration
 			);
 		}
@@ -155,9 +156,12 @@ onMounted(() => {
 	directionalLight.position.set(1, 1, 1);
 	scene.add(directionalLight);
 
-	// --- Turn-based ant movement system with counters ---
+	// --- Turn-based ant movement system with comprehensive controls ---
 	let currentTurn = 0;
 	let isAnimating = false;
+	let isPaused = false;
+	let isStopped = false;
+	let isStepMode = false;
 	const turnNumbers = Array.from(turns.keys()).sort((a, b) => a - b);
 	const TURN_DURATION = 2000; // 2 seconds per turn
 	const MOVE_DURATION = 1500; // 1.5 seconds for ant movement
@@ -167,7 +171,7 @@ onMounted(() => {
 	const antPositions = new Map<number, string>(); // antId -> roomId
 	const movingAnts = new Set<number>(); // Track which ants are currently moving
 
-	// Counter elements
+	// Counter and control elements
 	const createCounterDisplay = () => {
 		const counterDiv = document.createElement('div');
 		counterDiv.id = 'ant-counters';
@@ -188,7 +192,71 @@ onMounted(() => {
 		return counterDiv;
 	};
 
+	const createControlPanel = () => {
+		const controlDiv = document.createElement('div');
+		controlDiv.id = 'control-panel';
+		controlDiv.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: white;
+      padding: 20px;
+      border-radius: 15px;
+      font-family: 'Courier New', monospace;
+      z-index: 1000;
+      border: 2px solid #00ffff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 15px;
+      min-width: 400px;
+    `;
+
+		const buttonStyle = `
+      background: #00ffff;
+      color: black;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-family: 'Courier New', monospace;
+      font-weight: bold;
+      transition: all 0.2s;
+    `;
+
+		const sliderStyle = `
+      width: 300px;
+      height: 8px;
+      border-radius: 4px;
+      background: #333;
+      outline: none;
+      cursor: pointer;
+    `;
+
+		controlDiv.innerHTML = `
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <button id="play-btn" style="${buttonStyle}">▶️ Play</button>
+        <button id="pause-btn" style="${buttonStyle}">⏸️ Pause</button>
+        <button id="stop-btn" style="${buttonStyle}">⏹️ Stop</button>
+        <button id="step-btn" style="${buttonStyle}">⏭️ Step</button>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%;">
+        <input type="range" id="progress-slider" min="0" max="${turnNumbers.length}" value="0" style="${sliderStyle}">
+        <div style="color: #00ffff; font-size: 14px;">Progress: <span id="progress-text">0 / ${turnNumbers.length}</span></div>
+      </div>
+      <div style="color: #888; font-size: 12px; text-align: center;">
+        Space: Play/Pause • Arrow Keys: Step • R: Reset
+      </div>
+    `;
+
+		document.body.appendChild(controlDiv);
+		return controlDiv;
+	};
+
 	const counterDisplay = createCounterDisplay();
+	const controlPanel = createControlPanel();
 
 	const updateCounters = () => {
 		const startRoomId = nodes.find(n => n.type === 'start')?.id;
@@ -211,6 +279,126 @@ onMounted(() => {
       <div style="color: #ff0000;">🏁 At End: ${atEnd}</div>
       <div style="margin-top: 10px; color: #00ffff;">Turn: ${turnNumbers[currentTurn] || 0}</div>
     `;
+
+		// Update progress bar
+		const progressSlider = document.getElementById('progress-slider') as HTMLInputElement;
+		const progressText = document.getElementById('progress-text') as HTMLElement;
+		if (progressSlider && progressText) {
+			progressSlider.value = currentTurn.toString();
+			progressText.textContent = `${currentTurn} / ${turnNumbers.length}`;
+		}
+	};
+
+	// Control functions
+	const resetSimulation = () => {
+		isStopped = true;
+		isPaused = false;
+		isStepMode = false;
+		currentTurn = 0;
+		movingAnts.clear();
+
+		const startRoom = nodes.find(n => n.type === 'start');
+		if (startRoom) {
+			antPositions.forEach((_, antId) => {
+				antPositions.set(antId, startRoom.id as string);
+				const ant = antObjects.get(antId);
+				if (ant) {
+					ant.position.set(startRoom.x!, startRoom.y! + 2, startRoom.z!);
+				}
+			});
+		}
+
+		// Reset node display
+		nodes.forEach(node => {
+			node.ants = [];
+		});
+		antPositions.forEach((roomId, antId) => {
+			const node = nodes.find(n => n.id === roomId);
+			if (node) {
+				if (!node.ants) node.ants = [];
+				node.ants.push(antId);
+			}
+		});
+		Graph?.graphData({ nodes, links });
+
+		updateCounters();
+	};
+
+	const play = () => {
+		isStopped = false;
+		isPaused = false;
+		isStepMode = false;
+		if (!isAnimating) {
+			playNextTurn();
+		}
+	};
+
+	const pause = () => {
+		isPaused = true;
+	};
+
+	const stop = () => {
+		resetSimulation();
+	};
+
+	const stepForward = async () => {
+		if (isAnimating) return;
+		isStepMode = true;
+		isPaused = false;
+		isStopped = false;
+		if (currentTurn >= turnNumbers.length)
+		{
+			resetSimulation();
+			return;
+		}
+		await executeTurn(currentTurn);
+		currentTurn = (currentTurn + 1) % turnNumbers.length;
+		if (currentTurn === 0) {
+			setTimeout(resetSimulation, 1000);
+		}
+	};
+
+	const goToTurn = async (turnIndex: number) => {
+		if (isAnimating) return;
+
+		resetSimulation();
+
+		// Execute turns up to the target
+		for (let i = 0; i < turnIndex && i < turnNumbers.length; i++) {
+			const turnNumber = turnNumbers[i];
+			const moves = parsed.moves.filter(m => m.turn === turnNumber);
+
+			// Apply moves instantly without animation
+			moves.forEach(move => {
+				antPositions.set(move.ant, move.room);
+			});
+		}
+
+		currentTurn = turnIndex;
+
+		// Update node display
+		nodes.forEach(node => {
+			node.ants = [];
+		});
+		antPositions.forEach((roomId, antId) => {
+			const node = nodes.find(n => n.id === roomId);
+			if (node) {
+				if (!node.ants) node.ants = [];
+				node.ants.push(antId);
+			}
+		});
+
+		// Update ant positions visually
+		antPositions.forEach((roomId, antId) => {
+			const ant = antObjects.get(antId);
+			const room = getRoomPosition(roomId);
+			if (ant && room) {
+				ant.position.set(room.x, room.y + 2, room.z);
+			}
+		});
+
+		Graph?.graphData({ nodes, links });
+		updateCounters();
 	};
 
 	// Initialize ants at start position (inside the room, not floating above)
@@ -359,10 +547,9 @@ onMounted(() => {
 		isAnimating = false;
 	};
 
-	// Auto-play turns
-	let autoPlay = true;
+	// Auto-play turns (updated with new control logic)
 	const playNextTurn = async () => {
-		if (!autoPlay || turnNumbers.length === 0) return;
+		if (isPaused || isStopped || isStepMode || turnNumbers.length === 0) return;
 
 		await executeTurn(currentTurn);
 		currentTurn = (currentTurn + 1) % turnNumbers.length;
@@ -370,27 +557,70 @@ onMounted(() => {
 		// If we've completed all turns, pause for a moment before restarting
 		if (currentTurn === 0) {
 			setTimeout(() => {
-				if (autoPlay) {
-					// Reset all ants to start position and update counters
-					const startRoom = nodes.find(n => n.type === 'start');
-					if (startRoom) {
-						movingAnts.clear();
-						antPositions.forEach((_, antId) => {
-							antPositions.set(antId, startRoom.id as string);
-							const ant = antObjects.get(antId);
-							if (ant) {
-								ant.position.set(startRoom.x!, startRoom.y! + 2, startRoom.z!);
-							}
-						});
-						updateCounters();
-					}
-					setTimeout(playNextTurn, 1000);
+				if (!isPaused && !isStopped && !isStepMode) {
+					resetSimulation();
+					setTimeout(() => {
+						if (!isPaused && !isStopped && !isStepMode) {
+							playNextTurn();
+						}
+					}, 1000);
 				}
 			}, 2000);
-		} else {
+		} else if (!isPaused && !isStopped && !isStepMode) {
 			setTimeout(playNextTurn, TURN_DURATION - MOVE_DURATION);
 		}
 	};
+
+	// Event listeners for controls
+	const setupControlListeners = () => {
+		const playBtn = document.getElementById('play-btn');
+		const pauseBtn = document.getElementById('pause-btn');
+		const stopBtn = document.getElementById('stop-btn');
+		const stepBtn = document.getElementById('step-btn');
+		const progressSlider = document.getElementById('progress-slider') as HTMLInputElement;
+
+		playBtn?.addEventListener('click', play);
+		pauseBtn?.addEventListener('click', pause);
+		stopBtn?.addEventListener('click', stop);
+		stepBtn?.addEventListener('click', stepForward);
+
+		progressSlider?.addEventListener('input', (e) => {
+			const target = e.target as HTMLInputElement;
+			const turnIndex = parseInt(target.value);
+			goToTurn(turnIndex);
+		});
+
+		// Keyboard controls
+		document.addEventListener('keydown', (e) => {
+			switch (e.key) {
+				case ' ':
+					e.preventDefault();
+					if (isPaused || isStopped) {
+						play();
+					} else {
+						pause();
+					}
+					break;
+				case 'ArrowRight':
+					e.preventDefault();
+					stepForward();
+					break;
+				case 'ArrowLeft':
+					e.preventDefault();
+					if (currentTurn > 0) {
+						goToTurn(currentTurn - 1);
+					}
+					break;
+				case 'r':
+				case 'R':
+					e.preventDefault();
+					stop();
+					break;
+			}
+		});
+	};
+
+	setupControlListeners();
 
 	// Start the animation and initialize counters
 	if (turnNumbers.length > 0) {
