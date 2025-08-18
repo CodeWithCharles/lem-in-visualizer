@@ -49,6 +49,24 @@ nodes.forEach(node => {
 const graphContainer = ref<HTMLDivElement | null>(null);
 let Graph: ForceGraph3DInstance<GraphNode, any> | null = null;
 
+const getGraphCenter = () => {
+	const xs = nodes.map(n => n.x ?? 0);
+	const ys = nodes.map(n => n.y ?? 0);
+	const zs = nodes.map(n => n.z ?? 0);
+
+	const minX = Math.min(...xs), maxX = Math.max(...xs);
+	const minY = Math.min(...ys), maxY = Math.max(...ys);
+	const minZ = Math.min(...zs), maxZ = Math.max(...zs);
+
+	return {
+		x: (minX + maxX) / 2,
+		y: (minY + maxY) / 2,
+		z: (minZ + maxZ) / 2,
+		size: Math.max(maxX - minX, maxY - minY, maxZ - minZ)
+	};
+};
+
+
 onMounted(() => {
 	if (!graphContainer.value) return;
 
@@ -182,10 +200,14 @@ onMounted(() => {
 	// --- Position camera for better view (rotated 180°) ---
 	setTimeout(() => {
 		if (Graph) {
+			const center = getGraphCenter();
+
+			Graph.scene().scale.set(-1, -1, 1);
+			const distance = center.size * 2;
 			Graph.cameraPosition(
-				{ x: 0, y: 0, z: -100 }, // Camera position (flipped z)
-				{ x: 0, y: 0, z: 0 },    // Look at center
-				1000 // Animation duration
+				{ x: -center.x, y: -center.y, z: center.z - distance }, // Camera position (flipped z)
+				{ x: -center.x, y: -center.y, z: center.z },    // Look at center
+				2000 // Animation duration
 			);
 		}
 	}, 100);
