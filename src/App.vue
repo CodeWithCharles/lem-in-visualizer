@@ -110,30 +110,46 @@ onMounted(() => {
 		return group;
 	});
 
-	// --- Enhanced link rendering ---
+	// --- Create tube-like links ---
+	const tubeObjects = new Map<string, THREE.Mesh>();
+
 	Graph
-		.linkColor(() => 'white')
-		.linkWidth(2)
-		.linkOpacity(0.8)
+		.linkColor(() => 'transparent') // Hide default links
+		.linkWidth(0)
+		.linkOpacity(0)
 		.linkDirectionalParticles(0)
 		.linkThreeObject(link => {
-			// Create a custom link with better visibility
-			const material = new THREE.LineBasicMaterial({
-				color: 'cyan',
-				linewidth: 3,
-				opacity: 0.9,
-				transparent: true
+			const sourceNode = nodes.find(n => n.id === link.source);
+			const targetNode = nodes.find(n => n.id === link.target);
+
+			if (!sourceNode || !targetNode) return new THREE.Object3D();
+
+			// Create tube geometry
+			const start = new THREE.Vector3(sourceNode.x!, sourceNode.y!, sourceNode.z!);
+			const end = new THREE.Vector3(targetNode.x!, targetNode.y!, targetNode.z!);
+			const distance = start.distanceTo(end);
+
+			// Create a path for the tube
+			const curve = new THREE.LineCurve3(start, end);
+			const tubeGeometry = new THREE.TubeGeometry(curve, 20, 1.2, 8, false);
+
+			// Create semi-transparent tube material
+			const tubeMaterial = new THREE.MeshStandardMaterial({
+				color: 0x00ffff,
+				opacity: 0.3,
+				transparent: true,
+				side: THREE.DoubleSide,
+				emissive: 0x002222
 			});
 
-			const geometry = new THREE.BufferGeometry();
-			return new THREE.Line(geometry, material);
-		})
-		.linkPositionUpdate((obj, coords) => {
-			const { start, end } = coords;
-			if (obj instanceof THREE.Line) {
-				const positions = [start.x, start.y, start.z, end.x, end.y, end.z];
-				obj.geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-			}
+			const tube = new THREE.Mesh(tubeGeometry, tubeMaterial);
+
+			// Store tube for ant movement calculations
+			const linkKey = `${link.source}-${link.target}`;
+			tubeObjects.set(linkKey, tube);
+			tubeObjects.set(`${link.target}-${link.source}`, tube); // Both directions
+
+			return tube;
 		});
 
 	// --- Set initial graph data ---
@@ -168,7 +184,7 @@ onMounted(() => {
 	const antObjects = new Map<number, THREE.Mesh>();
 	const antPositions = new Map<number, string>(); // antId -> roomId
 
-	// Initialize ants at start position
+	// Initialize ants at start position (inside the room, not floating above)
 	const startRoom = nodes.find(n => n.type === 'start');
 	if (startRoom) {
 		for (let i = 1; i <= parsed.ants.length; i++) {
@@ -180,15 +196,16 @@ onMounted(() => {
 	const scene_ant = Graph.scene();
 	for (let i = 1; i <= parsed.ants.length; i++) {
 		const ant = new THREE.Mesh(
-			new THREE.SphereGeometry(0.8),
+			new THREE.SphereGeometry(0.6), // Slightly smaller to fit in tubes
 			new THREE.MeshStandardMaterial({
-				color: `hsl(${(i * 137.508) % 360}, 70%, 60%)` // Different color per ant
+				color: `hsl(${(i * 137.508) % 360}, 70%, 60%)`, // Different color per ant
+				emissive: `hsl(${(i * 137.508) % 360}, 30%, 20%)` // Slight glow
 			})
 		);
 
 		// Position ant at start room
 		if (startRoom) {
-			ant.position.set(startRoom.x!, startRoom.y! + 3, startRoom.z!);
+			ant.position.set(startRoom.x!, startRoom.y! + 2, startRoom.z!);
 		}
 
 		scene_ant.add(ant);
@@ -201,7 +218,7 @@ onMounted(() => {
 		return room ? { x: room.x!, y: room.y!, z: room.z! } : null;
 	};
 
-	// Function to animate ant movement
+	// Function to animate ant movement inside tubes
 	const moveAnt = (antId: number, fromRoom: string, toRoom: string, duration: number) => {
 		const ant = antObjects.get(antId);
 		const fromPos = getRoomPosition(fromRoom);
@@ -210,8 +227,11 @@ onMounted(() => {
 		if (!ant || !fromPos || !toPos) return;
 
 		const startTime = Date.now();
-		const startPos = { ...fromPos, y: fromPos.y + 3 };
-		const endPos = { ...toPos, y: toPos.y + 3 };
+
+		// Check if there's a tube for this path
+		const linkKey = `${fromRoom}-${toRoom}`;
+		const reverseLinkKey = `${toRoom}-${fromRoom}`;
+		const tube = tubeObjects.get(linkKey) || tubeObjects.get(reverseLinkKey);
 
 		const animate = () => {
 			const elapsed = Date.now() - startTime;
@@ -220,13 +240,35 @@ onMounted(() => {
 			// Smooth easing function
 			const easeProgress = 1 - Math.pow(1 - progress, 3);
 
-			// Interpolate position with a slight arc for better visibility
-			const x = startPos.x + (endPos.x - startPos.x) * easeProgress;
-			const z = startPos.z + (endPos.z - startPos.z) * easeProgress;
-			const y = startPos.y + (endPos.y - startPos.y) * easeProgress +
-				Math.sin(easeProgress * Math.PI) * 5; // Arc height
+			if (tube) {
+				// Move ant through the tube
+				const tubeGeometry = tube.geometry as THREE.TubeGeometry;
+				const tubeCurve = tubeGeometry.parameters.path as THREE.LineCurve3;
 
-			ant.position.set(x, y, z);
+				// Get position along the curve
+				const point = tubeCurve.getPoint(easeProgress);
+
+				// Add slight random offset within tube radius for variety
+				const tubeRadius = tubeGeometry.parameters.radius;
+				const randomAngle = (antId * 0.5) % (Math.PI * 2); // Consistent per ant
+				const offsetRadius = tubeRadius * 0.5;
+
+				point.x += Math.cos(randomAngle + progress * Math.PI * 2) * offsetRadius;
+				point.z += Math.sin(randomAngle + progress * Math.PI * 2) * offsetRadius;
+
+				ant.position.copy(point);
+			} else {
+				// Fallback: direct path with arc (original behavior)
+				const startPos = { ...fromPos, y: fromPos.y + 3 };
+				const endPos = { ...toPos, y: toPos.y + 3 };
+
+				const x = startPos.x + (endPos.x - startPos.x) * easeProgress;
+				const z = startPos.z + (endPos.z - startPos.z) * easeProgress;
+				const y = startPos.y + (endPos.y - startPos.y) * easeProgress +
+					Math.sin(easeProgress * Math.PI) * 5; // Arc height
+
+				ant.position.set(x, y, z);
+			}
 
 			if (progress < 1) {
 				requestAnimationFrame(animate);
