@@ -1,23 +1,46 @@
-interface Room {
-	id:			String;
-	x:			Number;
-	y:			Number;
-	z?:			Number;
-	links?:		String[];
+import type { NodeObject } from "3d-force-graph";
+
+export interface Room {
+	id:			string;
+	x:			number;
+	y:			number;
+	z?:			number | null;
+	links?:		string[];
 }
 
-interface Link {
-	from:		String;
-	to:			String;
+export interface Link {
+	from:		string;
+	to:			string;
 }
 
-interface Ant {
-	id: 		Number;
-	position:	String;
+export interface Ant {
+	id: 		number;
+	position:	string;
 }
 
-interface Move {
-	turn:		Number;
-	ant:		Number;
-	room:		String;
+export interface Move {
+	turn:		number;
+	ant:		number;
+	room:		string;
+}
+
+export interface GraphNode extends NodeObject {
+	id?:			string | number;
+	x?:			number;
+	y?:			number;
+	z?:			number;
+	type?:		"start" | "end" | "normal";
+	ants?:		number[];
+	color?:		string;
+}
+
+export interface GraphLink {
+	source:		string;
+	target:		string;
+}
+
+export interface GraphData {
+	nodes:		GraphNode[];
+	links:		GraphLink[];
+	turns:		Map<number, { [roomId: string]: number[] }>;
 }
