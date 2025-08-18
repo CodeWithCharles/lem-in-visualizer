@@ -63,7 +63,7 @@ onMounted(() => {
 		.enableNodeDrag(false)
 		.enableNavigationControls(true);
 
-	// --- Node rendering with ants (removed problematic labels) ---
+	// --- Node rendering with ants and hover labels ---
 	Graph.nodeThreeObject(node => {
 		const group = new THREE.Group();
 
@@ -74,8 +74,9 @@ onMounted(() => {
 		);
 		group.add(sphere);
 
-		// Render ants above node in a circle
-		if (node.ants && node.ants.length > 0) {
+		// Only render ant spheres above node if it's NOT the start room
+		// For start room, ants are shown as individual ant objects in the scene
+		if (node.ants && node.ants.length > 0 && node.type !== 'start') {
 			node.ants.forEach((antId, i) => {
 				const ant = new THREE.Mesh(
 					new THREE.SphereGeometry(0.5),
@@ -90,6 +91,46 @@ onMounted(() => {
 		}
 
 		return group;
+	});
+
+	// --- Add hover tooltip functionality ---
+	const tooltip = document.createElement('div');
+	tooltip.style.cssText = `
+		position: absolute;
+		background: rgba(0, 0, 0, 0.9);
+		color: white;
+		padding: 8px 12px;
+		border-radius: 5px;
+		font-family: 'Courier New', monospace;
+		font-size: 14px;
+		pointer-events: none;
+		z-index: 1001;
+		border: 1px solid #00ffff;
+		display: none;
+	`;
+	document.body.appendChild(tooltip);
+
+	Graph
+		.onNodeHover((node, prevNode) => {
+			// Only show tooltip for actual room nodes, not ant objects
+			if (node && node.id) {
+				const nodeType = node.type === 'start' ? ' (START)' : node.type === 'end' ? ' (END)' : '';
+				tooltip.innerHTML = `Room: ${node.id}${nodeType}`;
+				tooltip.style.display = 'block';
+			} else {
+				tooltip.style.display = 'none';
+			}
+		})
+		.onNodeClick((node) => {
+			if (node && node.id) {
+				console.log('Clicked node:', node.id);
+			}
+		});
+
+	// Update tooltip position on mouse move
+	document.addEventListener('mousemove', (e) => {
+		tooltip.style.left = (e.clientX + 10) + 'px';
+		tooltip.style.top = (e.clientY - 10) + 'px';
 	});
 
 	// --- Create tube-like links with proper bidirectional handling ---
@@ -157,7 +198,7 @@ onMounted(() => {
 	scene.add(directionalLight);
 
 	// --- Turn-based ant movement system with comprehensive controls ---
-	let currentTurn = 0;
+	let currentTurn = 0; // 0 = default state, 1 = first turn executed, etc.
 	let isAnimating = false;
 	let isPaused = false;
 	let isStopped = false;
@@ -273,14 +314,17 @@ onMounted(() => {
 			}
 		});
 
+		// Display turn number correctly: 0 for default state, actual turn number for executed turns
+		const displayTurn = currentTurn === 0 ? 'Start' : turnNumbers[currentTurn - 1] || 0;
+
 		counterDisplay.innerHTML = `
       <div style="margin-bottom: 8px; color: #00ff00;">🟢 At Start: ${atStart}</div>
       <div style="margin-bottom: 8px; color: #ffff00;">🔄 Traveling: ${traveling}</div>
       <div style="color: #ff0000;">🏁 At End: ${atEnd}</div>
-      <div style="margin-top: 10px; color: #00ffff;">Turn: ${turnNumbers[currentTurn] || 0}</div>
+      <div style="margin-top: 10px; color: #00ffff;">Turn: ${displayTurn}</div>
     `;
 
-		// Update progress bar
+		// Update progress bar: 0 for default state, 1 for first turn executed, etc.
 		const progressSlider = document.getElementById('progress-slider') as HTMLInputElement;
 		const progressText = document.getElementById('progress-text') as HTMLElement;
 		if (progressSlider && progressText) {
@@ -294,7 +338,7 @@ onMounted(() => {
 		isStopped = true;
 		isPaused = false;
 		isStepMode = false;
-		currentTurn = 0;
+		currentTurn = 0; // Reset to default state
 		movingAnts.clear();
 
 		const startRoom = nodes.find(n => n.type === 'start');
@@ -346,16 +390,19 @@ onMounted(() => {
 		isStepMode = true;
 		isPaused = false;
 		isStopped = false;
-		if (currentTurn >= turnNumbers.length)
-		{
+
+		// Check if we've completed all turns
+		if (currentTurn >= turnNumbers.length) {
 			resetSimulation();
 			return;
 		}
+
+		// Execute the next turn (currentTurn is 0-indexed for turnNumbers array)
 		await executeTurn(currentTurn);
-		currentTurn = (currentTurn + 1) % turnNumbers.length;
-		if (currentTurn === 0) {
-			setTimeout(resetSimulation, 1000);
-		}
+		currentTurn++; // Increment after executing
+
+		// If we've completed all turns, don't reset automatically in step mode
+		// User can manually reset or continue stepping will reset
 	};
 
 	const goToTurn = async (turnIndex: number) => {
@@ -363,7 +410,12 @@ onMounted(() => {
 
 		resetSimulation();
 
-		// Execute turns up to the target
+		// If turnIndex is 0, we're already at default state
+		if (turnIndex === 0) {
+			return;
+		}
+
+		// Execute turns up to the target (turnIndex represents completed turns)
 		for (let i = 0; i < turnIndex && i < turnNumbers.length; i++) {
 			const turnNumber = turnNumbers[i];
 			const moves = parsed.moves.filter(m => m.turn === turnNumber);
@@ -401,7 +453,7 @@ onMounted(() => {
 		updateCounters();
 	};
 
-	// Initialize ants at start position (inside the room, not floating above)
+	// Initialize ants at start position
 	const startRoom = nodes.find(n => n.type === 'start');
 	if (startRoom) {
 		for (let i = 1; i <= parsed.ants.length; i++) {
@@ -420,9 +472,15 @@ onMounted(() => {
 			})
 		);
 
-		// Position ant at start room
+		// Position ant at start room with slight offset to avoid overlap
 		if (startRoom) {
-			ant.position.set(startRoom.x!, startRoom.y! + 2, startRoom.z!);
+			const angle = (i / parsed.ants.length) * Math.PI * 2;
+			const radius = 1.5; // Small radius around the start room
+			ant.position.set(
+				startRoom.x! + Math.cos(angle) * radius,
+				startRoom.y! + 2,
+				startRoom.z! + Math.sin(angle) * radius
+			);
 		}
 
 		scene_ant.add(ant);
@@ -435,7 +493,7 @@ onMounted(() => {
 		return room ? { x: room.x!, y: room.y!, z: room.z! } : null;
 	};
 
-	// Function to animate ant movement inside tubes (fixed bidirectional)
+	// Function to animate ant movement inside tubes
 	const moveAnt = (antId: number, fromRoom: string, toRoom: string, duration: number) => {
 		const ant = antObjects.get(antId);
 		const fromPos = getRoomPosition(fromRoom);
@@ -470,7 +528,7 @@ onMounted(() => {
 
 				ant.position.copy(point);
 			} else {
-				// Fallback: direct path with arc (original behavior)
+				// Fallback: direct path with arc
 				const startPos = { ...fromPos, y: fromPos.y + 3 };
 				const endPos = { ...toPos, y: toPos.y + 3 };
 
@@ -490,7 +548,7 @@ onMounted(() => {
 		animate();
 	};
 
-	// Function to execute a turn (updated with counter tracking)
+	// Function to execute a turn
 	const executeTurn = async (turnIndex: number) => {
 		if (isAnimating || turnIndex >= turnNumbers.length) return;
 
@@ -547,15 +605,13 @@ onMounted(() => {
 		isAnimating = false;
 	};
 
-	// Auto-play turns (updated with new control logic)
+	// Auto-play turns
 	const playNextTurn = async () => {
 		if (isPaused || isStopped || isStepMode || turnNumbers.length === 0) return;
 
-		await executeTurn(currentTurn);
-		currentTurn = (currentTurn + 1) % turnNumbers.length;
-
-		// If we've completed all turns, pause for a moment before restarting
-		if (currentTurn === 0) {
+		// Check if we've completed all turns
+		if (currentTurn >= turnNumbers.length) {
+			// Pause for a moment before restarting
 			setTimeout(() => {
 				if (!isPaused && !isStopped && !isStepMode) {
 					resetSimulation();
@@ -566,7 +622,13 @@ onMounted(() => {
 					}, 1000);
 				}
 			}, 2000);
-		} else if (!isPaused && !isStopped && !isStepMode) {
+			return;
+		}
+
+		await executeTurn(currentTurn);
+		currentTurn++;
+
+		if (!isPaused && !isStopped && !isStepMode) {
 			setTimeout(playNextTurn, TURN_DURATION - MOVE_DURATION);
 		}
 	};
@@ -622,17 +684,22 @@ onMounted(() => {
 
 	setupControlListeners();
 
-	// Start the animation and initialize counters
+	// Initialize display
+	// Reset to ensure we start in default state
+	resetSimulation();
+
+	// Start the animation if there are turns
 	if (turnNumbers.length > 0) {
-		updateCounters(); // Initial counter display
-		setTimeout(playNextTurn, 1000);
-	} else {
-		updateCounters(); // Show initial state even with no moves
+		setTimeout(() => {
+			if (!isPaused && !isStopped && !isStepMode) {
+				playNextTurn();
+			}
+		}, 1000);
 	}
 
-	// Add controls (optional - you can remove this if not needed)
+	// Add controls (optional auto-play toggle)
 	window.addEventListener('keydown', (e) => {
-		if (e.key === ' ') {
+		if (e.key === ' ' && e.ctrlKey) {
 			autoPlay = !autoPlay;
 			if (autoPlay && !isAnimating) {
 				playNextTurn();
