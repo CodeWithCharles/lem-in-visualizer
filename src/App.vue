@@ -74,10 +74,10 @@ onMounted(() => {
 		);
 		group.add(sphere);
 
-		// Only render ant spheres above node if it's NOT the start room
-		// For start room, ants are shown as individual ant objects in the scene
-		if (node.ants && node.ants.length > 0 && node.type !== 'start') {
-			node.ants.forEach((antId, i) => {
+		// Don't render ant spheres above any node - we use individual ant objects in the scene
+		// This prevents duplicate visual representations
+		if (node.ants && (node.ants?.length ?? 0) > 0) {
+			node.ants?.forEach((antId, i) => {
 				const ant = new THREE.Mesh(
 					new THREE.SphereGeometry(0.5),
 					new THREE.MeshStandardMaterial({ color: 'orange' })
@@ -285,7 +285,7 @@ onMounted(() => {
       </div>
       <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%;">
         <input type="range" id="progress-slider" min="0" max="${turnNumbers.length}" value="0" style="${sliderStyle}">
-        <div style="color: #00ffff; font-size: 14px;">Progress: <span id="progress-text">0 / ${turnNumbers.length}</span></div>
+        <div style="color: #00ffff; font-size: 14px;">State: <span id="progress-text">Initial</span></div>
       </div>
       <div style="color: #888; font-size: 12px; text-align: center;">
         Space: Play/Pause • Arrow Keys: Step • R: Reset
@@ -299,7 +299,7 @@ onMounted(() => {
 	const counterDisplay = createCounterDisplay();
 	const controlPanel = createControlPanel();
 
-	const updateCounters = () => {
+	const updateCounters = (state: "initial" | "moving" | "complete" = "complete") => {
 		const startRoomId = nodes.find(n => n.type === 'start')?.id;
 		const endRoomId = nodes.find(n => n.type === 'end')?.id;
 
@@ -314,24 +314,37 @@ onMounted(() => {
 			}
 		});
 
-		// Display turn number correctly: 0 for default state, actual turn number for executed turns
-		const displayTurn = currentTurn === 0 ? 'Start' : turnNumbers[currentTurn - 1] || 0;
+		const displayTurn =
+			currentTurn === 0 ? 'Start' :
+				turnNumbers[currentTurn - 1] || 0;
 
 		counterDisplay.innerHTML = `
-      <div style="margin-bottom: 8px; color: #00ff00;">🟢 At Start: ${atStart}</div>
-      <div style="margin-bottom: 8px; color: #ffff00;">🔄 Traveling: ${traveling}</div>
-      <div style="color: #ff0000;">🏁 At End: ${atEnd}</div>
-      <div style="margin-top: 10px; color: #00ffff;">Turn: ${displayTurn}</div>
-    `;
+    <div style="margin-bottom: 8px; color: #00ff00;">🟢 At Start: ${atStart}</div>
+    <div style="margin-bottom: 8px; color: #ffff00;">🔄 Traveling: ${traveling}</div>
+    <div style="color: #ff0000;">🏁 At End: ${atEnd}</div>
+    <div style="margin-top: 10px; color: #00ffff;">
+      Turn: ${displayTurn} ${state === "moving" ? "(moving…)" : state === "complete" ? "(done)" : ""}
+    </div>
+  `;
 
-		// Update progress bar: 0 for default state, 1 for first turn executed, etc.
+		// Progress bar + text
 		const progressSlider = document.getElementById('progress-slider') as HTMLInputElement;
 		const progressText = document.getElementById('progress-text') as HTMLElement;
 		if (progressSlider && progressText) {
 			progressSlider.value = currentTurn.toString();
-			progressText.textContent = `${currentTurn} / ${turnNumbers.length}`;
+			if (currentTurn === 0) {
+				progressText.textContent = 'Initial';
+			} else if (currentTurn <= turnNumbers.length) {
+				progressText.textContent =
+					state === "moving"
+						? `Turn ${turnNumbers[currentTurn - 1]} in progress`
+						: `Turn ${turnNumbers[currentTurn - 1]} complete`;
+			} else {
+				progressText.textContent = 'All Complete';
+			}
 		}
 	};
+
 
 	// Control functions
 	const resetSimulation = () => {
@@ -347,22 +360,23 @@ onMounted(() => {
 				antPositions.set(antId, startRoom.id as string);
 				const ant = antObjects.get(antId);
 				if (ant) {
-					ant.position.set(startRoom.x!, startRoom.y! + 2, startRoom.z!);
+					// Position ants in a circle around the start room
+					const angle = (antId / parsed.ants.length) * Math.PI * 2;
+					const radius = 1.5;
+					ant.position.set(
+						startRoom.x! + Math.cos(angle) * radius,
+						startRoom.y! + 2,
+						startRoom.z! + Math.sin(angle) * radius
+					);
 				}
 			});
 		}
 
-		// Reset node display
+		// Reset node display - clear all ant representations on nodes
 		nodes.forEach(node => {
 			node.ants = [];
 		});
-		antPositions.forEach((roomId, antId) => {
-			const node = nodes.find(n => n.id === roomId);
-			if (node) {
-				if (!node.ants) node.ants = [];
-				node.ants.push(antId);
-			}
-		});
+		// Don't add ants back to nodes - we only use individual ant objects
 		Graph?.graphData({ nodes, links });
 
 		updateCounters();
@@ -397,9 +411,7 @@ onMounted(() => {
 			return;
 		}
 
-		// Execute the next turn (currentTurn is 0-indexed for turnNumbers array)
 		await executeTurn(currentTurn);
-		currentTurn++; // Increment after executing
 
 		// If we've completed all turns, don't reset automatically in step mode
 		// User can manually reset or continue stepping will reset
@@ -428,24 +440,33 @@ onMounted(() => {
 
 		currentTurn = turnIndex;
 
-		// Update node display
+		// Update node display - clear all ant representations on nodes
 		nodes.forEach(node => {
 			node.ants = [];
 		});
-		antPositions.forEach((roomId, antId) => {
-			const node = nodes.find(n => n.id === roomId);
-			if (node) {
-				if (!node.ants) node.ants = [];
-				node.ants.push(antId);
-			}
-		});
+		// Don't add ants back to nodes - we only use individual ant objects
 
 		// Update ant positions visually
 		antPositions.forEach((roomId, antId) => {
 			const ant = antObjects.get(antId);
 			const room = getRoomPosition(roomId);
 			if (ant && room) {
-				ant.position.set(room.x, room.y + 2, room.z);
+				// Position ants in a circle around the room if multiple ants
+				const antsInRoom = Array.from(antPositions.entries()).filter(([_, rId]) => rId === roomId);
+				const antIndex = antsInRoom.findIndex(([aId]) => aId === antId);
+				const totalAntsInRoom = antsInRoom.length;
+
+				if (totalAntsInRoom > 1) {
+					const angle = (antIndex / totalAntsInRoom) * Math.PI * 2;
+					const radius = 1.5;
+					ant.position.set(
+						room.x + Math.cos(angle) * radius,
+						room.y + 2,
+						room.z + Math.sin(angle) * radius
+					);
+				} else {
+					ant.position.set(room.x, room.y + 2, room.z);
+				}
 			}
 		});
 
@@ -553,6 +574,10 @@ onMounted(() => {
 		if (isAnimating || turnIndex >= turnNumbers.length) return;
 
 		isAnimating = true;
+		currentTurn = turnIndex + 1;
+
+		updateCounters("moving");
+
 		const turnNumber = turnNumbers[turnIndex];
 		const moves = parsed.moves.filter(m => m.turn === turnNumber);
 
@@ -560,7 +585,6 @@ onMounted(() => {
 
 		// Mark ants as moving and update counters
 		moves.forEach(move => movingAnts.add(move.ant));
-		updateCounters();
 
 		// Start all movements for this turn
 		const movePromises = moves.map(move => {
@@ -584,24 +608,9 @@ onMounted(() => {
 		// Wait for all movements to complete
 		await Promise.all(movePromises);
 
-		// Update node display (show ants on nodes)
-		nodes.forEach(node => {
-			node.ants = [];
-		});
-
-		antPositions.forEach((roomId, antId) => {
-			if (!movingAnts.has(antId)) {
-				const node = nodes.find(n => n.id === roomId);
-				if (node) {
-					if (!node.ants) node.ants = [];
-					node.ants.push(antId);
-				}
-			}
-		});
-
-		Graph?.graphData({ nodes, links });
-		updateCounters();
-
+		// DON'T update node display - we only use individual ant objects in the scene
+		// This prevents the duplication of ants (both as node decorations and individual objects)
+		updateCounters("complete");
 		isAnimating = false;
 	};
 
