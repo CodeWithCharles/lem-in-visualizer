@@ -11,6 +11,7 @@
   "dependencies": {
     "@tailwindcss/vite": "^4.1.12",
     "3d-force-graph": "^1.78.4",
+    "pinia": "^3.0.3",
     "three": "^0.179.1",
     "vue": "^3.5.18"
   },
