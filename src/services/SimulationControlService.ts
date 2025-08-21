@@ -1,10 +1,10 @@
 import { useSimulationStore } from "@/stores/useSimulationStore";
 import { useGraphStore } from "@/stores/useGraphStore";
-import { AnimationService } from "./AnimationService";
-import { ParsedData } from "@/types/parsedData";
+import { AnimationService } from "@/services/AnimationService";
+import { type ParsedData } from "@/types/parsedData";
 import type { Move, SimStats } from '@/types';
 import * as THREE from 'three';
-import type { ForceGraphService } from "./ForceGraphService";
+import { ForceGraphService } from "@/services/ForceGraphService";
 
 export class SimulationControlService {
 	private simulationStore = useSimulationStore();
@@ -60,7 +60,7 @@ export class SimulationControlService {
 		await this.reset();
 	}
 
-	async setForward() {
+	async stepForward() {
 		if (this.simulationStore.isAnimating) return;
 
 		this.simulationStore.isStepMode = true;

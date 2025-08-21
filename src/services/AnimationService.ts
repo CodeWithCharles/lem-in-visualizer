@@ -1,13 +1,13 @@
 import * as THREE from 'three';
-import { ForceGraphService } from './ForceGraphService';
+import { ForceGraphService } from '@/services/ForceGraphService';
 // import { useUIStore } from '@/stores/useUIStore';
 
 export class AnimationService {
-	private forceGraphService: ForceGraphService;
+	private forceGraphService: ForceGraphService | null;
 	// private uiStore = useUIStore();
 	private activeAnimations = new Map<number, { cancel: () => void}>();
 
-	constructor(forceGraphService: ForceGraphService) {
+	constructor(forceGraphService: ForceGraphService | null) {
 		this.forceGraphService = forceGraphService;
 	}
 
@@ -19,11 +19,11 @@ export class AnimationService {
 		duration: number
 	): Promise<void> {
 		return new Promise((resolve) => {
-			const ant = this.forceGraphService.getAntMesh(antId);
+			const ant = this.forceGraphService?.getAntMesh(antId);
 			if (!ant) return resolve();
 
 			const startTime = Date.now();
-			const curve = this.forceGraphService.getTubeCurve(linkId);
+			const curve = this.forceGraphService?.getTubeCurve(linkId);
 			let animationId: number;
 
 			const animate = () => {
@@ -70,7 +70,7 @@ export class AnimationService {
 	}
 
 	positionAntAtRoom(antId: number, position: THREE.Vector3, offset?: { angle: number, radius: number }) {
-		const ant = this.forceGraphService.getAntMesh(antId);
+		const ant = this.forceGraphService?.getAntMesh(antId);
 		if (!ant) return;
 
 		if (offset) {
@@ -98,7 +98,7 @@ export class AnimationService {
 	}
 
 	pulseAnt(antId: number) {
-		const ant = this.forceGraphService.getAntMesh(antId);
+		const ant = this.forceGraphService?.getAntMesh(antId);
 		if (!ant) return;
 
 		const originalScale = ant.scale.x;

@@ -1,19 +1,9 @@
-import type {Ant, Room, Link, Move} from '@/types'
+import type { Room, Link, Move } from './index';
 
-export class ParsedData {
-	ants: Ant[];
+export interface ParsedData {
 	rooms: Room[];
 	links: Link[];
+	numberOfAnts: number;
 	moves: Move[];
-	start: string;
-	end: string;
-
-	constructor() {
-		this.ants = [];
-		this.rooms = [];
-		this.links = [];
-		this.moves = [];
-		this.start = "";
-		this.end = "";
-	}
+	turns?: Map<number, { [roomId: string]: number[] }>;
 }

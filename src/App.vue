@@ -1,752 +1,337 @@
+<template>
+	<div class="main-app">
+		<!-- File Upload Screen -->
+		<div v-if="!graphData" class="upload-screen">
+			<div class="app-header">
+				<h1>🐜 Ant Farm Visualizer</h1>
+				<p>Visualize ant colony pathfinding in 3D space</p>
+			</div>
+
+			<FileUpload @file-loaded="handleFileLoaded" @file-error="handleFileError" />
+
+			<div v-if="errorMessage" class="error-message">
+				<div class="error-icon">⚠️</div>
+				<div class="error-text">{{ errorMessage }}</div>
+			</div>
+		</div>
+
+		<!-- Main Visualization -->
+		<div v-else class="visualization-screen">
+			<GraphVisualization ref="graphVisualization" @graph-ready="handleGraphReady" />
+
+			<SimulationControls v-if="isGraphReady" />
+
+			<!-- Info Panel -->
+			<div class="info-panel">
+				<div class="panel-section">
+					<h4>Graph Info</h4>
+					<div class="info-grid">
+						<span>Rooms:</span><span>{{ graphStore.totalRooms }}</span>
+						<span>Tunnels:</span><span>{{ graphStore.totalConnections }}</span>
+						<span>Start:</span><span>{{ graphStore.startNode?.id || 'None' }}</span>
+						<span>End:</span><span>{{ graphStore.endNode?.id || 'None' }}</span>
+					</div>
+				</div>
+
+				<div class="panel-section">
+					<h4>Simulation</h4>
+					<div class="info-grid">
+						<span>Ants:</span><span>{{ simulationStore.totalAnts }}</span>
+						<span>Status:</span><span :class="statusClass">{{ simulationStatus }}</span>
+					</div>
+				</div>
+
+				<div class="panel-actions">
+					<button @click="resetVisualization" class="panel-btn">
+						🔄 New File
+					</button>
+					<button @click="exportData" class="panel-btn" :disabled="!canExport">
+						💾 Export
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
+</template>
+
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import ForceGraph3D, { type ForceGraph3DInstance } from '3d-force-graph';
-import * as THREE from 'three';
-import { parsedDataTo3DForceGraph } from './utils/converter';
-import { parseLemin } from './utils/parser';
-import type { GraphNode } from '@/types';
-import { ParsedData } from './types/parsedData';
+import { ref, computed, onMounted } from 'vue';
+import { useGraphStore } from '@/stores/useGraphStore';
+import { useSimulationStore } from '@/stores/useSimulationStore';
+import { type ParsedData } from '@/types/parsedData';
+import GraphVisualization from '@/components/GraphVisualization.vue';
+import SimulationControls from '@/components/SimulationControls.vue';
+import FileUpload from '@/components/FileUpload.vue';
 
-const SCALE = 10; // Increased scale for better visibility
-let autoPlay = false;
+const graphStore = useGraphStore();
+const simulationStore = useSimulationStore();
 
-// --- Parse input ---
-const parsed: ParsedData = parseLemin(`2
-1 0 2
-##start
-0 2 0
-##end
-4 2 6
-2 4 2
-3 4 4
-0-1
-0-2
-2-3
-3-4
-4-1
-L1-1
-L1-4 L2-1
-L2-4`);
+const graphVisualization = ref<InstanceType<typeof GraphVisualization> | null>(null);
+const graphData = ref<ParsedData | null>(null);
+const errorMessage = ref<string>('');
+const isGraphReady = ref<boolean>(false);
 
-const { nodes, links, turns } = parsedDataTo3DForceGraph(parsed);
-
-// --- Ensure numeric coordinates and default values ---
-nodes.forEach(node => {
-	node.x = Number(node.x ?? 0) * SCALE;
-	node.y = Number(node.y ?? 0) * SCALE;
-	node.z = (Number(node.z ?? 0) + Math.random() * 0.5 * nodes.length) * SCALE;
-	console.log(node);
-	node.type = node.type ?? "normal";
-	node.ants = [];
-	node.color = node.type === 'start' ? 'green' : node.type === 'end' ? 'red' : 'lightblue';
-
-	// Add fixed positions - this is crucial!
-	node.fx = node.x;
-	node.fy = node.y;
-	node.fz = node.z;
+const simulationStatus = computed(() => {
+	if (simulationStore.isAnimating) return 'Running';
+	if (simulationStore.isPaused) return 'Paused';
+	if (simulationStore.isSimulationComplete) return 'Complete';
+	return 'Ready';
 });
 
-// --- Graph container ---
-const graphContainer = ref<HTMLDivElement | null>(null);
-let Graph: ForceGraph3DInstance<GraphNode, any> | null = null;
+const statusClass = computed(() => ({
+	'status-running': simulationStore.isAnimating,
+	'status-paused': simulationStore.isPaused,
+	'status-complete': simulationStore.isSimulationComplete,
+	'status-ready': !simulationStore.isAnimating && !simulationStore.isPaused && !simulationStore.isSimulationComplete,
+}));
 
-const getGraphCenter = () => {
-	const xs = nodes.map(n => n.x ?? 0);
-	const ys = nodes.map(n => n.y ?? 0);
-	const zs = nodes.map(n => n.z ?? 0);
+const canExport = computed(() => graphData.value !== null);
 
-	const minX = Math.min(...xs), maxX = Math.max(...xs);
-	const minY = Math.min(...ys), maxY = Math.max(...ys);
-	const minZ = Math.min(...zs), maxZ = Math.max(...zs);
+const handleFileLoaded = async (data: ParsedData) => {
+	try {
+		graphData.value = data;
+		errorMessage.value = '';
 
-	return {
-		x: (minX + maxX) / 2,
-		y: (minY + maxY) / 2,
-		z: (minZ + maxZ) / 2,
-		size: Math.max(maxX - minX, maxY - minY, maxZ - minZ)
-	};
+		// Process the data into graph format
+		const nodes = data.rooms.map(room => ({
+			id: room.id,
+			x: room.x,
+			y: room.y,
+			z: room.z,
+			type: room.type,
+			color: room.type === 'start' ? '#4CAF50' : room.type === 'end' ? '#F44336' : '#2196F3',
+			ants: [],
+		}));
+
+		const links = data.links.map(link => ({
+			source: link.from,
+			target: link.to,
+		}));
+
+		// Update stores
+		graphStore.setGraphData(nodes, links, data.turns || new Map());
+
+		// Initialize simulation with parsed data
+		await nextTick();
+		if (graphVisualization.value?.simulationControlService) {
+			graphVisualization.value.simulationControlService.setParsedData(data);
+		}
+
+	} catch (error) {
+		errorMessage.value = error instanceof Error ? error.message : 'Failed to process file data';
+	}
 };
 
+const handleFileError = (error: string) => {
+	errorMessage.value = error;
+};
+
+const handleGraphReady = () => {
+	isGraphReady.value = true;
+};
+
+const resetVisualization = () => {
+	graphStore.reset();
+	simulationStore.reset();
+	graphData.value = null;
+	errorMessage.value = '';
+	isGraphReady.value = false;
+};
+
+const exportData = () => {
+	if (!graphData.value) return;
+
+	const dataStr = JSON.stringify(graphData.value, null, 2);
+	const dataBlob = new Blob([dataStr], { type: 'application/json' });
+	const url = URL.createObjectURL(dataBlob);
+
+	const link = document.createElement('a');
+	link.href = url;
+	link.download = 'ant-farm-data.json';
+	document.body.appendChild(link);
+	link.click();
+	document.body.removeChild(link);
+	URL.revokeObjectURL(url);
+};
 
 onMounted(() => {
-	if (!graphContainer.value) return;
-
-	Graph = new ForceGraph3D(graphContainer.value);
-
-	// --- Completely disable physics simulation ---
-	Graph
-		.d3Force('charge', null)
-		.d3Force('center', null)
-		.d3Force('link', null)
-		.numDimensions(3)
-		.enableNodeDrag(false)
-		.enableNavigationControls(true);
-
-	// --- Node rendering with ants and hover labels ---
-	Graph.nodeThreeObject(node => {
-		const group = new THREE.Group();
-
-		// Base node sphere - made larger for better visibility
-		const sphere = new THREE.Mesh(
-			new THREE.SphereGeometry(2), // Increased size
-			new THREE.MeshStandardMaterial({ color: node.color })
-		);
-		group.add(sphere);
-
-		// Don't render ant spheres above any node - we use individual ant objects in the scene
-		// This prevents duplicate visual representations
-		if (node.ants && (node.ants?.length ?? 0) > 0) {
-			node.ants?.forEach((antId, i) => {
-				const ant = new THREE.Mesh(
-					new THREE.SphereGeometry(0.5),
-					new THREE.MeshStandardMaterial({ color: 'orange' })
-				);
-				const angle = (i / (node.ants?.length ?? 0)) * Math.PI * 2;
-				ant.position.x = Math.cos(angle) * 3;
-				ant.position.y = 4;
-				ant.position.z = Math.sin(angle) * 3;
-				group.add(ant);
-			});
-		}
-
-		return group;
-	});
-
-	// --- Add hover tooltip functionality ---
-	const tooltip = document.createElement('div');
-	tooltip.style.cssText = `
-		position: absolute;
-		background: rgba(0, 0, 0, 0.9);
-		color: white;
-		padding: 8px 12px;
-		border-radius: 5px;
-		font-family: 'Courier New', monospace;
-		font-size: 14px;
-		pointer-events: none;
-		z-index: 1001;
-		border: 1px solid #00ffff;
-		display: none;
-	`;
-	document.body.appendChild(tooltip);
-
-	Graph
-		.onNodeHover((node, prevNode) => {
-			// Only show tooltip for actual room nodes, not ant objects
-			if (node && node.id) {
-				const nodeType = node.type === 'start' ? ' (START)' : node.type === 'end' ? ' (END)' : '';
-				tooltip.innerHTML = `Room: ${node.id}${nodeType}`;
-				tooltip.style.display = 'block';
-			} else {
-				tooltip.style.display = 'none';
-			}
-		})
-		.onNodeClick((node) => {
-			if (node && node.id) {
-				console.log('Clicked node:', node.id);
-			}
-		});
-
-	// Update tooltip position on mouse move
-	document.addEventListener('mousemove', (e) => {
-		tooltip.style.left = (e.clientX + 10) + 'px';
-		tooltip.style.top = (e.clientY - 10) + 'px';
-	});
-
-	// --- Create tube-like links with proper bidirectional handling ---
-	const tubeObjects = new Map<string, { tube: THREE.Mesh, curve: THREE.LineCurve3 }>();
-
-	Graph
-		.linkColor(() => 'transparent') // Hide default links
-		.linkWidth(0)
-		.linkOpacity(0)
-		.linkDirectionalParticles(0)
-		.linkThreeObject(link => {
-			const sourceNode = nodes.find(n => n.id === link.source);
-			const targetNode = nodes.find(n => n.id === link.target);
-
-			if (!sourceNode || !targetNode) return new THREE.Object3D();
-
-			// Create tube geometry
-			const start = new THREE.Vector3(sourceNode.x!, sourceNode.y!, sourceNode.z!);
-			const end = new THREE.Vector3(targetNode.x!, targetNode.y!, targetNode.z!);
-
-			// Create a path for the tube
-			const curve = new THREE.LineCurve3(start, end);
-			const tubeGeometry = new THREE.TubeGeometry(curve, 20, 1.2, 8, false);
-
-			// Create semi-transparent tube material
-			const tubeMaterial = new THREE.MeshStandardMaterial({
-				color: 0x00ffff,
-				opacity: 0.3,
-				transparent: true,
-				side: THREE.DoubleSide,
-				emissive: 0x002222
-			});
-
-			const tube = new THREE.Mesh(tubeGeometry, tubeMaterial);
-
-			// Store tube for ant movement calculations (both directions with same curve)
-			const linkKey1 = `${link.source}-${link.target}`;
-			const linkKey2 = `${link.target}-${link.source}`;
-
-			tubeObjects.set(linkKey1, { tube, curve });
-			tubeObjects.set(linkKey2, { tube, curve: new THREE.LineCurve3(end, start) }); // Reversed curve
-
-			return tube;
-		});
-
-	// --- Set initial graph data ---
-	Graph.graphData({ nodes, links });
-
-	// --- Position camera for better view (rotated 180°) ---
-	setTimeout(() => {
-		if (Graph) {
-			const center = getGraphCenter();
-
-			Graph.scene().scale.set(-1, -1, 1);
-			const distance = center.size * 2;
-			Graph.cameraPosition(
-				{ x: -center.x, y: -center.y, z: center.z - distance }, // Camera position (flipped z)
-				{ x: -center.x, y: -center.y, z: center.z },    // Look at center
-				2000 // Animation duration
-			);
-		}
-	}, 100);
-
-	// --- Add better lighting ---
-	const scene = Graph.scene();
-	scene.add(new THREE.AmbientLight(0x404040, 0.6));
-	const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-	directionalLight.position.set(1, 1, 1);
-	scene.add(directionalLight);
-
-	// --- Turn-based ant movement system with comprehensive controls ---
-	let currentTurn = 0; // 0 = default state, 1 = first turn executed, etc.
-	let isAnimating = false;
-	let isPaused = false;
-	let isStopped = false;
-	let isStepMode = false;
-	const turnNumbers = Array.from(turns.keys()).sort((a, b) => a - b);
-	const TURN_DURATION = 2000; // 2 seconds per turn
-	const MOVE_DURATION = 1500; // 1.5 seconds for ant movement
-
-	// Track ant positions and movements
-	const antObjects = new Map<number, THREE.Mesh>();
-	const antPositions = new Map<number, string>(); // antId -> roomId
-	const movingAnts = new Set<number>(); // Track which ants are currently moving
-
-	// Counter and control elements
-	const createCounterDisplay = () => {
-		const counterDiv = document.createElement('div');
-		counterDiv.id = 'ant-counters';
-		counterDiv.style.cssText = `
-      position: fixed;
-      top: 20px;
-      left: 20px;
-      background: rgba(0, 0, 0, 0.8);
-      color: white;
-      padding: 15px;
-      border-radius: 10px;
-      font-family: 'Courier New', monospace;
-      font-size: 16px;
-      z-index: 1000;
-      border: 2px solid #00ffff;
-    `;
-		document.body.appendChild(counterDiv);
-		return counterDiv;
-	};
-
-	const createControlPanel = () => {
-		const controlDiv = document.createElement('div');
-		controlDiv.id = 'control-panel';
-		controlDiv.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0, 0, 0, 0.9);
-      color: white;
-      padding: 20px;
-      border-radius: 15px;
-      font-family: 'Courier New', monospace;
-      z-index: 1000;
-      border: 2px solid #00ffff;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 15px;
-      min-width: 400px;
-    `;
-
-		const buttonStyle = `
-      background: #00ffff;
-      color: black;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 5px;
-      cursor: pointer;
-      font-family: 'Courier New', monospace;
-      font-weight: bold;
-      transition: all 0.2s;
-    `;
-
-		const sliderStyle = `
-      width: 300px;
-      height: 8px;
-      border-radius: 4px;
-      background: #333;
-      outline: none;
-      cursor: pointer;
-    `;
-
-		controlDiv.innerHTML = `
-      <div style="display: flex; gap: 10px; align-items: center;">
-        <button id="play-btn" style="${buttonStyle}">▶️ Play</button>
-        <button id="pause-btn" style="${buttonStyle}">⏸️ Pause</button>
-        <button id="stop-btn" style="${buttonStyle}">⏹️ Stop</button>
-        <button id="step-btn" style="${buttonStyle}">⏭️ Step</button>
-      </div>
-      <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%;">
-        <input type="range" id="progress-slider" min="0" max="${turnNumbers.length}" value="0" style="${sliderStyle}">
-        <div style="color: #00ffff; font-size: 14px;">State: <span id="progress-text">Initial</span></div>
-      </div>
-      <div style="color: #888; font-size: 12px; text-align: center;">
-        Space: Play/Pause • Arrow Keys: Step • R: Reset
-      </div>
-    `;
-
-		document.body.appendChild(controlDiv);
-		return controlDiv;
-	};
-
-	const counterDisplay = createCounterDisplay();
-	const controlPanel = createControlPanel();
-
-	const updateCounters = (state: "initial" | "moving" | "complete" = "complete") => {
-		const startRoomId = nodes.find(n => n.type === 'start')?.id;
-		const endRoomId = nodes.find(n => n.type === 'end')?.id;
-
-		let atStart = 0;
-		let traveling = movingAnts.size;
-		let atEnd = 0;
-
-		antPositions.forEach((roomId, antId) => {
-			if (!movingAnts.has(antId)) {
-				if (roomId === startRoomId) atStart++;
-				else if (roomId === endRoomId) atEnd++;
-			}
-		});
-
-		const displayTurn =
-			currentTurn === 0 ? 'Start' :
-				turnNumbers[currentTurn - 1] || 0;
-
-		counterDisplay.innerHTML = `
-    <div style="margin-bottom: 8px; color: #00ff00;">🟢 At Start: ${atStart}</div>
-    <div style="margin-bottom: 8px; color: #ffff00;">🔄 Traveling: ${traveling}</div>
-    <div style="color: #ff0000;">🏁 At End: ${atEnd}</div>
-    <div style="margin-top: 10px; color: #00ffff;">
-      Turn: ${displayTurn} ${state === "moving" ? "(moving…)" : state === "complete" ? "(done)" : ""}
-    </div>
-  `;
-
-		// Progress bar + text
-		const progressSlider = document.getElementById('progress-slider') as HTMLInputElement;
-		const progressText = document.getElementById('progress-text') as HTMLElement;
-		if (progressSlider && progressText) {
-			progressSlider.value = currentTurn.toString();
-			if (currentTurn === 0) {
-				progressText.textContent = 'Initial';
-			} else if (currentTurn <= turnNumbers.length) {
-				progressText.textContent =
-					state === "moving"
-						? `Turn ${turnNumbers[currentTurn - 1]} in progress`
-						: `Turn ${turnNumbers[currentTurn - 1]} complete`;
-			} else {
-				progressText.textContent = 'All Complete';
-			}
-		}
-	};
-
-
-	// Control functions
-	const resetSimulation = () => {
-		isStopped = true;
-		isPaused = false;
-		isStepMode = false;
-		currentTurn = 0; // Reset to default state
-		movingAnts.clear();
-
-		const startRoom = nodes.find(n => n.type === 'start');
-		if (startRoom) {
-			antPositions.forEach((_, antId) => {
-				antPositions.set(antId, startRoom.id as string);
-				const ant = antObjects.get(antId);
-				if (ant) {
-					// Position ants in a circle around the start room
-					const angle = (antId / parsed.ants.length) * Math.PI * 2;
-					const radius = 1.5;
-					ant.position.set(
-						startRoom.x! + Math.cos(angle) * radius,
-						startRoom.y! + 2,
-						startRoom.z! + Math.sin(angle) * radius
-					);
-					// ant.position.set(
-					// 	startRoom.x!,
-					// 	startRoom.y!,
-					// 	startRoom.z!
-					// )
-				}
-			});
-		}
-
-		// Reset node display - clear all ant representations on nodes
-		nodes.forEach(node => {
-			node.ants = [];
-		});
-		// Don't add ants back to nodes - we only use individual ant objects
-		Graph?.graphData({ nodes, links });
-
-		updateCounters();
-	};
-
-	const play = () => {
-		isStopped = false;
-		isPaused = false;
-		isStepMode = false;
-		if (!isAnimating) {
-			playNextTurn();
-		}
-	};
-
-	const pause = () => {
-		isPaused = true;
-	};
-
-	const stop = () => {
-		resetSimulation();
-	};
-
-	const stepForward = async () => {
-		if (isAnimating) return;
-		isStepMode = true;
-		isPaused = false;
-		isStopped = false;
-
-		// Check if we've completed all turns
-		if (currentTurn >= turnNumbers.length) {
-			resetSimulation();
-			return;
-		}
-
-		await executeTurn(currentTurn);
-
-		// If we've completed all turns, don't reset automatically in step mode
-		// User can manually reset or continue stepping will reset
-	};
-
-	const goToTurn = async (turnIndex: number) => {
-		if (isAnimating) return;
-
-		resetSimulation();
-
-		// If turnIndex is 0, we're already at default state
-		if (turnIndex === 0) {
-			return;
-		}
-
-		// Execute turns up to the target (turnIndex represents completed turns)
-		for (let i = 0; i < turnIndex && i < turnNumbers.length; i++) {
-			const turnNumber = turnNumbers[i];
-			const moves = parsed.moves.filter(m => m.turn === turnNumber);
-
-			// Apply moves instantly without animation
-			moves.forEach(move => {
-				antPositions.set(move.ant, move.room);
-			});
-		}
-
-		currentTurn = turnIndex;
-
-		// Update node display - clear all ant representations on nodes
-		nodes.forEach(node => {
-			node.ants = [];
-		});
-		// Don't add ants back to nodes - we only use individual ant objects
-
-		// Update ant positions visually
-		antPositions.forEach((roomId, antId) => {
-			const ant = antObjects.get(antId);
-			const room = getRoomPosition(roomId);
-			if (ant && room) {
-				// Position ants in a circle around the room if multiple ants
-				const antsInRoom = Array.from(antPositions.entries()).filter(([_, rId]) => rId === roomId);
-				const antIndex = antsInRoom.findIndex(([aId]) => aId === antId);
-				const totalAntsInRoom = antsInRoom.length;
-
-				// if (totalAntsInRoom > 1) {
-				// 	const angle = (antIndex / totalAntsInRoom) * Math.PI * 2;
-				// 	const radius = 1.5;
-				// 	ant.position.set(
-				// 		room.x + Math.cos(angle) * radius,
-				// 		room.y + 2,
-				// 		room.z + Math.sin(angle) * radius
-				// 	);
-				// } else {
-				ant.position.set(room.x, room.y, room.z);
-				// }
-			}
-		});
-
-		Graph?.graphData({ nodes, links });
-		updateCounters();
-	};
-
-	// Initialize ants at start position
-	const startRoom = nodes.find(n => n.type === 'start');
-	if (startRoom) {
-		for (let i = 1; i <= parsed.ants.length; i++) {
-			antPositions.set(i, startRoom.id as string);
-		}
-	}
-
-	// Create ant objects in the scene
-	const scene_ant = Graph.scene();
-	for (let i = 1; i <= parsed.ants.length; i++) {
-		const ant = new THREE.Mesh(
-			new THREE.SphereGeometry(0.6), // Slightly smaller to fit in tubes
-			new THREE.MeshStandardMaterial({
-				color: `hsl(${(i * 137.508) % 360}, 70%, 60%)`, // Different color per ant
-				emissive: `hsl(${(i * 137.508) % 360}, 30%, 20%)` // Slight glow
-			})
-		);
-
-		// Position ant at start room with slight offset to avoid overlap
-		if (startRoom) {
-			const angle = (i / parsed.ants.length) * Math.PI * 2;
-			const radius = 1.5; // Small radius around the start room
-			ant.position.set(
-				startRoom.x! + Math.cos(angle) * radius,
-				startRoom.y! + 2,
-				startRoom.z! + Math.sin(angle) * radius
-			);
-		}
-
-		scene_ant.add(ant);
-		antObjects.set(i, ant);
-	}
-
-	// Function to get room position by ID
-	const getRoomPosition = (roomId: string) => {
-		const room = nodes.find(n => n.id === roomId);
-		return room ? { x: room.x!, y: room.y!, z: room.z! } : null;
-	};
-
-	// Function to animate ant movement inside tubes
-	const moveAnt = (antId: number, fromRoom: string, toRoom: string, duration: number) => {
-		const ant = antObjects.get(antId);
-		const fromPos = getRoomPosition(fromRoom);
-		const toPos = getRoomPosition(toRoom);
-
-		if (!ant || !fromPos || !toPos) return;
-
-		const startTime = Date.now();
-
-		// Get the correct directional curve
-		const linkKey = `${fromRoom}-${toRoom}`;
-		const tubeData = tubeObjects.get(linkKey);
-
-		const animate = () => {
-			const elapsed = Date.now() - startTime;
-			const progress = Math.min(elapsed / duration, 1);
-
-			// Smooth easing function
-			const easeProgress = 1 - Math.pow(1 - progress, 3);
-
-			if (tubeData) {
-				// Move ant through the tube using the correct directional curve
-				const point = tubeData.curve.getPoint(easeProgress);
-
-				// Add slight random offset within tube radius for variety
-				const tubeRadius = 1.2;
-				const randomAngle = (antId * 0.5) % (Math.PI * 2); // Consistent per ant
-				const offsetRadius = tubeRadius * 0.3;
-
-				point.x += Math.cos(randomAngle + progress * Math.PI * 2) * offsetRadius;
-				point.z += Math.sin(randomAngle + progress * Math.PI * 2) * offsetRadius;
-
-				ant.position.copy(point);
-			} else {
-				// Fallback: direct path with arc
-				const startPos = { ...fromPos, y: fromPos.y + 3 };
-				const endPos = { ...toPos, y: toPos.y + 3 };
-
-				const x = startPos.x + (endPos.x - startPos.x) * easeProgress;
-				const z = startPos.z + (endPos.z - startPos.z) * easeProgress;
-				const y = startPos.y + (endPos.y - startPos.y) * easeProgress +
-					Math.sin(easeProgress * Math.PI) * 5; // Arc height
-
-				ant.position.set(x, y, z);
-			}
-
-			if (progress < 1) {
-				requestAnimationFrame(animate);
-			}
-		};
-
-		animate();
-	};
-
-	// Function to execute a turn
-	const executeTurn = async (turnIndex: number) => {
-		if (isAnimating || turnIndex >= turnNumbers.length) return;
-
-		isAnimating = true;
-		currentTurn = turnIndex + 1;
-
-		updateCounters("moving");
-
-		const turnNumber = turnNumbers[turnIndex];
-		const moves = parsed.moves.filter(m => m.turn === turnNumber);
-
-		console.log(`Turn ${turnNumber}:`, moves);
-
-		// Mark ants as moving and update counters
-		moves.forEach(move => movingAnts.add(move.ant));
-
-		// Start all movements for this turn
-		const movePromises = moves.map(move => {
-			return new Promise<void>((resolve) => {
-				const currentPos = antPositions.get(move.ant);
-				if (currentPos) {
-					moveAnt(move.ant, currentPos, move.room, MOVE_DURATION);
-
-					// Update position after movement completes
-					setTimeout(() => {
-						antPositions.set(move.ant, move.room);
-						movingAnts.delete(move.ant);
-						resolve();
-					}, MOVE_DURATION);
-				} else {
-					resolve();
-				}
-			});
-		});
-
-		// Wait for all movements to complete
-		await Promise.all(movePromises);
-
-		// DON'T update node display - we only use individual ant objects in the scene
-		// This prevents the duplication of ants (both as node decorations and individual objects)
-		updateCounters("complete");
-		isAnimating = false;
-	};
-
-	// Auto-play turns
-	const playNextTurn = async () => {
-		if (isPaused || isStopped || isStepMode || turnNumbers.length === 0) return;
-
-		// Check if we've completed all turns
-		if (currentTurn >= turnNumbers.length) {
-			// Pause for a moment before restarting
-			setTimeout(() => {
-				if (!isPaused && !isStopped && !isStepMode) {
-					resetSimulation();
-					setTimeout(() => {
-						if (!isPaused && !isStopped && !isStepMode) {
-							playNextTurn();
-						}
-					}, 1000);
-				}
-			}, 2000);
-			return;
-		}
-
-		await executeTurn(currentTurn);
-		currentTurn++;
-
-		if (!isPaused && !isStopped && !isStepMode) {
-			setTimeout(playNextTurn, TURN_DURATION - MOVE_DURATION);
-		}
-	};
-
-	// Event listeners for controls
-	const setupControlListeners = () => {
-		const playBtn = document.getElementById('play-btn');
-		const pauseBtn = document.getElementById('pause-btn');
-		const stopBtn = document.getElementById('stop-btn');
-		const stepBtn = document.getElementById('step-btn');
-		const progressSlider = document.getElementById('progress-slider') as HTMLInputElement;
-
-		playBtn?.addEventListener('click', play);
-		pauseBtn?.addEventListener('click', pause);
-		stopBtn?.addEventListener('click', stop);
-		stepBtn?.addEventListener('click', stepForward);
-
-		progressSlider?.addEventListener('input', (e) => {
-			const target = e.target as HTMLInputElement;
-			const turnIndex = parseInt(target.value);
-			goToTurn(turnIndex);
-		});
-
-		// Keyboard controls
-		document.addEventListener('keydown', (e) => {
-			switch (e.key) {
-				case ' ':
-					e.preventDefault();
-					if (isPaused || isStopped) {
-						play();
-					} else {
-						pause();
-					}
-					break;
-				case 'ArrowRight':
-					e.preventDefault();
-					stepForward();
-					break;
-				case 'ArrowLeft':
-					e.preventDefault();
-					if (currentTurn > 0) {
-						goToTurn(currentTurn - 1);
-					}
-					break;
-				case 'r':
-				case 'R':
-					e.preventDefault();
-					stop();
-					break;
-			}
-		});
-	};
-
-	setupControlListeners();
-
-	// Initialize display
-	// Reset to ensure we start in default state
-	resetSimulation();
-
-	// Start the animation if there are turns
-	if (turnNumbers.length > 0) {
-		setTimeout(() => {
-			if (!isPaused && !isStopped && !isStepMode) {
-				playNextTurn();
-			}
-		}, 1000);
-	}
-
-	// Add controls (optional auto-play toggle)
-	window.addEventListener('keydown', (e) => {
-		if (e.key === ' ' && e.ctrlKey) {
-			autoPlay = !autoPlay;
-			if (autoPlay && !isAnimating) {
-				playNextTurn();
-			}
-			console.log('Auto-play:', autoPlay ? 'ON' : 'OFF');
-		}
-	});
+	// Initialize any global settings
+	document.title = 'Ant Farm Visualizer';
 });
 </script>
 
-<template>
-	<div id="3d-graph" ref="graphContainer" style="width: 100%; height: 100vh; background: #000;"></div>
-</template>
+<style scoped>
+.main-app {
+	width: 100vw;
+	height: 100vh;
+	background: linear-gradient(135deg, #000000, #001122, #000000);
+	color: white;
+	font-family: 'Courier New', monospace;
+	overflow: hidden;
+}
+
+.upload-screen {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	height: 100vh;
+	padding: 20px;
+	background: radial-gradient(circle at center, rgba(0, 255, 255, 0.1) 0%, transparent 70%);
+}
+
+.app-header {
+	text-align: center;
+	margin-bottom: 40px;
+}
+
+.app-header h1 {
+	font-size: 48px;
+	margin: 0 0 20px 0;
+	background: linear-gradient(45deg, #00ffff, #0099cc);
+	-webkit-background-clip: text;
+	-webkit-text-fill-color: transparent;
+	background-clip: text;
+	text-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+}
+
+.app-header p {
+	font-size: 18px;
+	color: #aaa;
+	margin: 0;
+}
+
+.error-message {
+	margin-top: 20px;
+	padding: 15px 20px;
+	background: rgba(255, 68, 68, 0.1);
+	border: 1px solid #ff4444;
+	border-radius: 8px;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	max-width: 500px;
+}
+
+.error-icon {
+	font-size: 20px;
+}
+
+.error-text {
+	color: #ff6666;
+	font-size: 14px;
+}
+
+.visualization-screen {
+	position: relative;
+	width: 100%;
+	height: 100%;
+}
+
+.info-panel {
+	position: fixed;
+	top: 20px;
+	left: 20px;
+	background: rgba(0, 0, 0, 0.9);
+	border: 1px solid #00ffff;
+	border-radius: 10px;
+	padding: 15px;
+	min-width: 200px;
+	font-size: 12px;
+}
+
+.panel-section {
+	margin-bottom: 15px;
+}
+
+.panel-section:last-child {
+	margin-bottom: 0;
+}
+
+.panel-section h4 {
+	margin: 0 0 8px 0;
+	color: #00ffff;
+	font-size: 14px;
+	border-bottom: 1px solid #333;
+	padding-bottom: 4px;
+}
+
+.info-grid {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 4px 10px;
+	font-size: 11px;
+}
+
+.info-grid span:nth-child(odd) {
+	color: #aaa;
+}
+
+.info-grid span:nth-child(even) {
+	color: #00ffff;
+	font-weight: bold;
+	text-align: right;
+}
+
+.status-running {
+	color: #ff9800 !important;
+}
+
+.status-paused {
+	color: #ffc107 !important;
+}
+
+.status-complete {
+	color: #4caf50 !important;
+}
+
+.status-ready {
+	color: #00ffff !important;
+}
+
+.panel-actions {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.panel-btn {
+	background: rgba(0, 255, 255, 0.2);
+	border: 1px solid #00ffff;
+	color: #00ffff;
+	padding: 6px 12px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-family: 'Courier New', monospace;
+	font-size: 10px;
+	transition: all 0.2s;
+	text-align: center;
+}
+
+.panel-btn:hover:not(:disabled) {
+	background: rgba(0, 255, 255, 0.4);
+}
+
+.panel-btn:disabled {
+	opacity: 0.3;
+	cursor: not-allowed;
+}
+
+/* Global scrollbar styling */
+:global(::-webkit-scrollbar) {
+	width: 8px;
+}
+
+:global(::-webkit-scrollbar-track) {
+	background: #222;
+}
+
+:global(::-webkit-scrollbar-thumb) {
+	background: #00ffff;
+	border-radius: 4px;
+}
+
+:global(::-webkit-scrollbar-thumb:hover) {
+	background: #0099cc;
+}
+</style>

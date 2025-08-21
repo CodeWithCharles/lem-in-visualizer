@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, readonly, ref } from "vue";
 import type { GraphNode, GraphLink } from '@/types';
-import { ParsedData } from '@/types/parsedData';
+import { type ParsedData } from '@/types/parsedData';
 
 export const useGraphStore = defineStore('graph', () => {
 	const nodes = ref<GraphNode[]>([]);
