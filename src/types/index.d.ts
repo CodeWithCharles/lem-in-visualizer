@@ -44,3 +44,11 @@ export interface GraphData {
 	links:		GraphLink[];
 	turns:		Map<number, { [roomId: string]: number[] }>;
 }
+
+export interface SimStats {
+	totalTurns:		number;
+	currentTurn:	number;
+	totalAnts:		number;
+	movingAnts:		number;
+	isComplete:		boolean;
+}

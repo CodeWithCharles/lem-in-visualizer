@@ -42,7 +42,7 @@ export class ForceGraphService {
 		if (!this.graph) return;
 
 		this.graph
-			.onNodeHover((node, prevNode) => {
+			.onNodeHover((node, _) => {
 				if (node && node.id) {
 					this.uiStore.showNodeTooltip(`Room: ${node.id}\nType: ${node.type || 'normal'}\nAnts: ${node.ants?.length || 0}`, node.x, node.y);
 				} else {
