@@ -4,6 +4,7 @@ import { ForceGraphService } from '@/services/ForceGraphService';
 import { AnimationService } from '@/services/AnimationService';
 import { SimulationControlService } from '@/services/SimulationControlService';
 import type { ForceGraph3DInstance } from '3d-force-graph';
+import { nextTick } from 'vue';
 
 export function useGraphVisualization(container: Ref<HTMLElement | null>) {
 	const graphStore = useGraphStore();
@@ -14,41 +15,43 @@ export function useGraphVisualization(container: Ref<HTMLElement | null>) {
 
 	const isInitialized = computed(() => forceGraphService.value !== null);
 
-	const initializeGraph = () => {
+	const initializeGraph = async () => {
+		if (!container.value) await nextTick();
 		if (!container.value || forceGraphService.value) return;
 
-		// Initialize services - create actual class instances
-		const forceGraphServiceInstance = new ForceGraphService();
+		// Force next tick to let DOM render
+		await nextTick();
+
+		const forceGraphServiceInstance = new ForceGraphService(container);
 		forceGraphService.value = forceGraphServiceInstance;
 
-		if (!forceGraphServiceInstance) return;
-		forceGraphInstance.value = forceGraphServiceInstance.initialize(container.value);
+		const graphInstance = forceGraphServiceInstance.initialize();
+		forceGraphInstance.value = graphInstance;
 
-		// Pass the actual class instances, not the reactive refs
 		const animationServiceInstance = new AnimationService(forceGraphServiceInstance);
 		animationService.value = animationServiceInstance;
+		simulationControlService.value = new SimulationControlService(animationServiceInstance, forceGraphServiceInstance);
 
-		const simulationControlServiceInstance = new SimulationControlService(
-			animationServiceInstance,
-			forceGraphServiceInstance
-		);
-		simulationControlService.value = simulationControlServiceInstance;
-
+		await new Promise(r => setTimeout(r, 50));
 		setupGraphData();
 		setupCamera();
 	};
 
 	const setupGraphData = () => {
-		if (!forceGraphService.value || graphStore.nodes.length === 0) return;
+		try {
+			if (!forceGraphService.value || graphStore.nodes.length === 0) return;
 
-		// Create mutable copies of the readonly arrays
-		const mutableNodes = [...graphStore.nodes].map(node => ({
-			...node,
-			ants: node.ants ? [...node.ants] : undefined // Make ants array mutable if it exists
-		}));
-		const mutableLinks = [...graphStore.links];
+			// Create mutable copies of the readonly arrays
+			const mutableNodes = [...graphStore.nodes].map(node => ({
+				...node,
+				ants: node.ants ? [...node.ants] : undefined // Make ants array mutable if it exists
+			}));
+			const mutableLinks = [...graphStore.links];
 
-		forceGraphService.value.updateGraphData(mutableNodes, mutableLinks);
+			forceGraphService.value.updateGraphData(mutableNodes, mutableLinks);
+		} catch (error) {
+			console.error('Error setting up graph data:', error);
+		}
 	};
 
 	const setupCamera = () => {

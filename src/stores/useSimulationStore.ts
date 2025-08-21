@@ -36,6 +36,10 @@ export const useSimulationStore = defineStore('simulation', () => {
 		movingAnts.value = new Set(movingAnts.value);
 	};
 
+	const setTurnNumbers = (turns: number[]) => {
+		turnNumbers.value = [...turns];
+	};
+
 	const reset = () => {
 		currentTurn.value = 0;
 		isPaused.value = false;
@@ -43,6 +47,9 @@ export const useSimulationStore = defineStore('simulation', () => {
 		isAnimating.value = false;
 		movingAnts.value.clear();
 		movingAnts.value = new Set();
+		antPositions.value.clear();
+		antPositions.value = new Map();
+		turnNumbers.value = [];
 	};
 
 	return {
@@ -60,6 +67,7 @@ export const useSimulationStore = defineStore('simulation', () => {
 
 		// Actions
 		setCurrentTurn,
+		setTurnNumbers,
 		moveAnt,
 		addMovingAnt,
 		removeMovingAnt,

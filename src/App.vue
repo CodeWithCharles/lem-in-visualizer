@@ -55,7 +55,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import { useGraphStore } from '@/stores/useGraphStore';
 import { useSimulationStore } from '@/stores/useSimulationStore';
 import { type ParsedData } from '@/types/parsedData';
@@ -94,7 +94,7 @@ const handleFileLoaded = async (data: ParsedData) => {
 
 		// Process the data into graph format
 		const nodes = data.rooms.map(room => ({
-			id: room.id,
+			id: room.name,
 			x: room.x,
 			y: room.y,
 			z: room.z,

@@ -4,6 +4,7 @@ import type { ForceGraph3DInstance } from '3d-force-graph';
 import { useGraphStore } from '@/stores/useGraphStore';
 import { useUIStore } from '@/stores/useUIStore';
 import ForceGraph3D from '3d-force-graph';
+import { type Ref, ref } from 'vue';
 
 export class ForceGraphService {
 	private graph: ForceGraph3DInstance<GraphNode, any> | null = null;
@@ -12,10 +13,16 @@ export class ForceGraphService {
 	private antObjects = new Map<number, THREE.Mesh>();
 	private nodeObjects = new Map<string, THREE.Group>();
 	private tubeObjects = new Map<string, { tube: THREE.Mesh, curve: THREE.CatmullRomCurve3 }>();
+	private container = ref<HTMLElement | null>();
 
-	initialize(container: HTMLElement | null): ForceGraph3DInstance<GraphNode, any> | null {
-		if (!container) return null;
-		this.graph = new ForceGraph3D(container);
+	constructor(container: Ref<HTMLElement | null>) {
+		if (!container) return;
+		this.container = container;
+	}
+
+	initialize(): ForceGraph3DInstance<GraphNode, any> | null {
+		if (!this.container.value) return null;
+		this.graph = new ForceGraph3D(this.container!.value!);
 		this.setupGraph();
 		this.setupInteractions();
 		return this.graph;
@@ -43,7 +50,9 @@ export class ForceGraphService {
 
 		this.graph
 			.onNodeHover((node, _) => {
+				if (!this.uiStore) return ;
 				if (node && node.id) {
+					console.log(node);
 					this.uiStore.showNodeTooltip(`Room: ${node.id}\nType: ${node.type || 'normal'}\nAnts: ${node.ants?.length || 0}`, node.x, node.y);
 				} else {
 					this.uiStore.hideTooltip();
@@ -191,7 +200,6 @@ export class ForceGraphService {
 		this.antObjects.clear();
 		this.nodeObjects.clear();
 		this.tubeObjects.clear();
-		this.graph?.clear();
 		this.graph = null;
 	}
 }

@@ -1,7 +1,7 @@
 <template>
 	<div ref="graphContainer" class="graph-container" @mousemove="updateTooltipPosition">
 		<!-- Tooltip -->
-		<div v-if="showTooltip" class="tooltip" :style="tooltipStyle">
+		<div v-show="showTooltip" class="tooltip" :style="tooltipStyle">
 			<pre>{{ tooltipContent }}</pre>
 		</div>
 
@@ -26,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, provide } from 'vue';
+import { ref, onMounted, provide, nextTick } from 'vue';
 import { useGraphVisualization } from '@/composables/useGraphVisualization';
 import { useTooltip } from '@/composables/useTooltip';
 
@@ -54,7 +54,8 @@ provide('forceGraphService', forceGraphService);
 provide('animationService', animationService);
 provide('simulationControlService', simulationControlService);
 
-onMounted(() => {
+onMounted(async () => {
+	await nextTick();
 	initializeGraph();
 });
 
